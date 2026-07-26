@@ -23,7 +23,6 @@ class GroundRobot:
     def move_one_step(self):
 
         if self.path_index >= len(self.path):
-            self.reached_goal = True
             return False
 
         next_position = self.path[self.path_index]
@@ -31,9 +30,6 @@ class GroundRobot:
         self.position = next_position
         self.path_index += 1
         self.distance_traveled += 1
-
-        if self.path_index >= len(self.path):
-            self.reached_goal = True
 
         return True
     
