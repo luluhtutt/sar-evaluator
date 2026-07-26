@@ -4,15 +4,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import ListedColormap
 
-from config import ROBOT_START, VICTIM_POSITION, GRID_HEIGHT, GRID_WIDTH, ROBOT_SENSOR_RANGE
+from config import (ROBOT_START,
+                    VICTIM_POSITION,
+                    GRID_HEIGHT,
+                    GRID_WIDTH,
+                    ROBOT_SENSOR_RANGE,
+                    DRONE_SENSOR_RANGE,
+                    DRONE_DEPLOY_STEP)
 from environment import Environment
 from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
 from planner import astar
 from robot import GroundRobot
+from drone import Drone
 
-
-def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal, step_number, victim_found):
+def visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number, victim_found):
     # visualize environment and paths
     plt.clf()
 
@@ -23,6 +29,7 @@ def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal,
         "red" #victim
     ])
 
+    # plotting ground truth
     robot_row, robot_col = robot.position
     true_world_plot = plt.subplot(1, 2, 1)
     true_world_plot.imshow(
@@ -44,6 +51,17 @@ def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal,
         s=100,
         label="Robot"
     )
+
+    if drone.active:
+        drone_row, drone_col = drone.position
+
+        true_world_plot.scatter(
+            drone_col,
+            drone_row,
+            marker="^",
+            s=120,
+            label="Drone"
+        )
 
     victim_row, victim_col = VICTIM_POSITION
     true_world_plot.scatter(
@@ -100,6 +118,7 @@ def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal,
             linewidth=2,
             label="Current path"
         )
+
     occupancy_plot.scatter(
         robot_col,
         robot_row,
@@ -108,10 +127,22 @@ def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal,
         label="Robot"
     )
 
+    if drone.active:
+        drone_row, drone_col = drone.position
+        occupancy_plot.scatter(
+            drone_col,
+            drone_row,
+            marker="^",
+            s=120,
+            label="Drone"
+        )
+
     if victim_found:
         status = "Victim detected"
+    elif drone.active:
+        status = "Aerial scout exploring"
     else:
-        status = "Exploring"
+        status = "Ground robot exploring"
 
     occupancy_plot.set_title(f"Robot Occupancy Map\nExplored: {occupancy_map.percent_explored():.1f}%")
     occupancy_plot.set_xlabel("Column")
@@ -129,6 +160,7 @@ def main():
     environment = Environment()
     occupancy_map = OccupancyMap(GRID_HEIGHT, GRID_WIDTH)
     robot = GroundRobot(ROBOT_START)
+    drone = Drone()
 
     plt.figure(figsize=(14, 7))
     step_number = 0
@@ -136,6 +168,23 @@ def main():
     victim_found = False
 
     while step_number < max_steps:
+
+        # drone deployment
+        if drone.active:
+            drone.move_one_step()
+            visualize(environment, occupancy_map, robot, drone, None, [], drone.target, step_number, victim_found)
+
+            if drone.reached_target:
+                print("Drone reached target: ", drone.position)
+
+                occupancy_map.update_from_sensor(environment, drone.position, DRONE_SENSOR_RANGE)
+
+                drone.finish_mission()
+
+            step_number += 1
+            continue
+
+        # ground robot
 
         occupancy_map.update_from_sensor(
             environment,
@@ -145,6 +194,8 @@ def main():
 
         known_victim_position = occupancy_map.find_known_victim()
 
+        # select victim or explore frontier
+
         if known_victim_position is not None:
             victim_found = True
 
@@ -152,6 +203,7 @@ def main():
 
             frontiers = []
             selected_goal = known_victim_position
+
         else:
             victim_found = False
 
@@ -159,16 +211,25 @@ def main():
 
             selected_goal, path = choose_frontier(occupancy_map, robot.position, frontiers)
 
-        visualize(environment, occupancy_map, robot, path, frontiers, selected_goal, step_number, victim_found)
-        
+        # deployment
+        # TODO change from hardcoded ??
+        if step_number >= DRONE_DEPLOY_STEP and not drone.has_been_used and selected_goal is not None and known_victim_position is None:
+            deployed = drone.deploy(robot.position, selected_goal)
+            if deployed:
+                continue
+
+        visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number, victim_found)
+
+        # check for stop conditions
         if known_victim_position is not None and robot.position == known_victim_position:
-            print("Victim reached!")
+            print("Victim reached")
             break
 
         if path is None:
             print("No path found")
             break
 
+        # ground robot motion
         robot.set_path(path)
 
         moved = robot.move_one_step()
@@ -185,10 +246,12 @@ def main():
     occupancy_map.update_from_sensor(environment, robot.position, ROBOT_SENSOR_RANGE)
 
     print("Total distance traveled:", robot.distance_traveled)
+    print("Drone used:", drone.has_been_used)
+    print("Drone distance traveled:", drone.distance_traveled)
     print("Total simulation steps:", step_number)
     print("Map explored:",f"{occupancy_map.percent_explored():.1f}%")
 
-    plt.savefig("outputs/exploration_occupancy_map.png", dpi=200)
+    plt.savefig("outputs/exploration_occupancy_map_with_drone.png", dpi=200)
 
     plt.show()
 
