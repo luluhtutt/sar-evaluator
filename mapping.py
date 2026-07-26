@@ -4,6 +4,7 @@ from config import (
     FREE,
     OBSTACLE,
     UNKNOWN,
+    VICTIM
 )
 
 class OccupancyMap:
@@ -46,6 +47,28 @@ class OccupancyMap:
             return True
         
         return False
+    
+    def is_known_traversable(self, position):
+        # return true if the cell is known and safe
+        row, col = position
+        cell_value = self.grid[row, col]
+
+        if not self.is_in_bounds(position):
+            return False
+
+        return cell_value == FREE or cell_value == VICTIM
+
+    
+    def find_known_victim(self):
+        # if victim has been observed, return its position
+        victim_cells = np.argwhere(self.grid == VICTIM)
+
+        if len(victim_cells) == 0:
+            return None
+
+        victim_row, victim_col = victim_cells[0]
+
+        return (int(victim_row), int(victim_col))
 
     def count_known_cells(self):
         # get number of cells that have been observed
@@ -59,4 +82,5 @@ class OccupancyMap:
         total_cells = self.count_total_cells()
 
         return 100.0 * known_cells / total_cells
+
     
