@@ -53,14 +53,14 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     )
 
     if drone.active:
-        drone_row, drone_col = drone.position
+        drone_row, drone_col, drone_altitude = drone.position
 
         true_world_plot.scatter(
             drone_col,
             drone_row,
             marker="^",
             s=120,
-            label="Drone"
+            label=f"Drone z={drone_altitude:.1f}"
         )
 
     victim_row, victim_col = VICTIM_POSITION
@@ -128,13 +128,13 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     )
 
     if drone.active:
-        drone_row, drone_col = drone.position
+        drone_row, drone_col, drone_altitude = drone.position
         occupancy_plot.scatter(
             drone_col,
             drone_row,
             marker="^",
             s=120,
-            label="Drone"
+            label=f"Drone z={drone_altitude:.1f}"
         )
 
     if victim_found:
@@ -171,14 +171,17 @@ def main():
 
         # drone deployment
         if drone.active:
-            drone.move_one_step()
+            drone.move_one_step(environment)
+
+            if drone.state == "scanning":
+                drone_row, drone_col, drone_alt = drone.position
+                occupancy_map.update_from_sensor(environment, (int(round(drone_row)), int(round(drone_col))), DRONE_SENSOR_RANGE)
+
+                drone.finish_mission()
+
             visualize(environment, occupancy_map, robot, drone, None, [], drone.target, step_number, victim_found)
 
-            if drone.reached_target:
-                print("Drone reached target: ", drone.position)
-
-                occupancy_map.update_from_sensor(environment, drone.position, DRONE_SENSOR_RANGE)
-
+            if drone.state == "finished":
                 drone.finish_mission()
 
             step_number += 1
