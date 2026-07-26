@@ -6,12 +6,13 @@ from matplotlib.colors import ListedColormap
 
 from config import ROBOT_START, VICTIM_POSITION, GRID_HEIGHT, GRID_WIDTH, ROBOT_SENSOR_RANGE
 from environment import Environment
+from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
 from planner import astar
 from robot import GroundRobot
 
 
-def visualize(environment, occupancy_map, robot, path, step_number):
+def visualize(environment, occupancy_map, robot, path, frontiers, selected_goal, step_number, victim_found):
     # visualize environment and paths
     plt.clf()
 
@@ -22,6 +23,7 @@ def visualize(environment, occupancy_map, robot, path, step_number):
         "red" #victim
     ])
 
+    robot_row, robot_col = robot.position
     true_world_plot = plt.subplot(1, 2, 1)
     true_world_plot.imshow(
         environment.grid,
@@ -55,8 +57,8 @@ def visualize(environment, occupancy_map, robot, path, step_number):
     true_world_plot.legend()
 
     # occupancy map
-    map_plot = plt.subplot(1, 2, 2)
-    map_plot.imshow(
+    occupancy_plot = plt.subplot(1, 2, 2)
+    occupancy_plot.imshow(
         occupancy_map.grid,
         cmap=map_colors,
         vmin=-1,
@@ -64,19 +66,41 @@ def visualize(environment, occupancy_map, robot, path, step_number):
         origin="upper"
     )
 
-    map_plot.set_title(f"Robot Occupancy Map\nExplored: {occupancy_map.percent_explored():.1f}%")
-    map_plot.set_xlabel("Column")
-    map_plot.set_ylabel("Row")
+    # draw frontier cells
+    if len(frontiers) > 0:
+
+        frontier_array = np.array(frontiers)
+
+        occupancy_plot.scatter(
+            frontier_array[:, 1],
+            frontier_array[:, 0],
+            marker=".",
+            s=25,
+            label="Frontiers"
+        )
+
+    # draw selected exploration goal
+    if selected_goal is not None:
+
+        goal_row, goal_col = selected_goal
+
+        occupancy_plot.scatter(
+            goal_col,
+            goal_row,
+            marker="*",
+            s=160,
+            label="Selected goal"
+        )
     if path is not None and len(path) > 0:
         path_array = np.array(path)
 
-        map_plot.plot(
+        occupancy_plot.plot(
             path_array[:, 1],
             path_array[:, 0],
             linewidth=2,
-            label="Current A* path"
+            label="Current path"
         )
-    map_plot.scatter(
+    occupancy_plot.scatter(
         robot_col,
         robot_row,
         marker="o",
@@ -84,7 +108,15 @@ def visualize(environment, occupancy_map, robot, path, step_number):
         label="Robot"
     )
 
-    map_plot.legend()
+    if victim_found:
+        status = "Victim detected"
+    else:
+        status = "Exploring"
+
+    occupancy_plot.set_title(f"Robot Occupancy Map\nExplored: {occupancy_map.percent_explored():.1f}%")
+    occupancy_plot.set_xlabel("Column")
+    occupancy_plot.set_ylabel("Row")
+    occupancy_plot.legend()
 
     plt.suptitle(f"Step: {step_number} | Distance: {robot.distance_traveled}"
     )
@@ -100,23 +132,44 @@ def main():
 
     plt.figure(figsize=(14, 7))
     step_number = 0
-    max_steps = 500
+    max_steps = 1000
+    victim_found = False
 
-    while robot.position != VICTIM_POSITION:
+    while step_number < max_steps:
 
         occupancy_map.update_from_sensor(
             environment,
             robot.position,
             ROBOT_SENSOR_RANGE
         )
-        path = astar(start=robot.position, goal=VICTIM_POSITION, is_traversable=occupancy_map.is_traversable)
+
+        known_victim_position = occupancy_map.find_known_victim()
+
+        if known_victim_position is not None:
+            victim_found = True
+
+            path = astar(start=robot.position, goal=known_victim_position, is_traversable=occupancy_map.is_traversable)
+
+            frontiers = []
+            selected_goal = known_victim_position
+        else:
+            victim_found = False
+
+            frontiers = find_frontiers(occupancy_map)
+
+            selected_goal, path = choose_frontier(occupancy_map, robot.position, frontiers)
+
+        visualize(environment, occupancy_map, robot, path, frontiers, selected_goal, step_number, victim_found)
+        
+        if known_victim_position is not None and robot.position == known_victim_position:
+            print("Victim reached!")
+            break
+
         if path is None:
             print("No path found")
             break
 
         robot.set_path(path)
-
-        visualize(environment, occupancy_map, robot, path, step_number)
 
         moved = robot.move_one_step()
 
@@ -128,19 +181,9 @@ def main():
 
         if step_number >= max_steps:
             print("Maximum number of steps reached.")
-            break
+
     occupancy_map.update_from_sensor(environment, robot.position, ROBOT_SENSOR_RANGE)
 
-    final_path = [robot.position]
-
-    visualize(environment, occupancy_map, robot, final_path, step_number)
-    step_number = 0
-
-    
-    if robot.position == VICTIM_POSITION:
-        print("Victim reached!")
-    else:
-        print("Victim was not reached")
     print("Total distance traveled:", robot.distance_traveled)
     print("Total simulation steps:", step_number)
     print("Map explored:",f"{occupancy_map.percent_explored():.1f}%")

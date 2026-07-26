@@ -1,4 +1,4 @@
-"""Run the ground robot mapping simulation."""
+"""Run frontier exploration until the victim is detected and reached."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +12,7 @@ from config import (
     VICTIM_POSITION,
 )
 from environment import Environment
+from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
 from planner import astar
 from robot import GroundRobot
@@ -22,14 +23,15 @@ def draw_simulation(
     occupancy_map,
     robot,
     path,
-    step_number
+    frontiers,
+    selected_goal,
+    step_number,
+    victim_found
 ):
-    """Draw the true environment and the robot's known map."""
+    """Draw the true environment and robot occupancy map."""
 
     plt.clf()
 
-    # Colors correspond to:
-    # unknown, free, obstacle, victim
     map_colors = ListedColormap([
         "gray",
         "white",
@@ -37,7 +39,9 @@ def draw_simulation(
         "red"
     ])
 
-    # Draw the true environment on the left.
+    robot_row, robot_col = robot.position
+
+    # Ground-truth world
     true_world_plot = plt.subplot(1, 2, 1)
 
     true_world_plot.imshow(
@@ -47,12 +51,6 @@ def draw_simulation(
         vmax=2,
         origin="upper"
     )
-
-    true_world_plot.set_title("Ground Truth")
-    true_world_plot.set_xlabel("Column")
-    true_world_plot.set_ylabel("Row")
-
-    robot_row, robot_col = robot.position
 
     true_world_plot.scatter(
         robot_col,
@@ -72,12 +70,15 @@ def draw_simulation(
         label="Victim"
     )
 
+    true_world_plot.set_title("Ground Truth")
+    true_world_plot.set_xlabel("Column")
+    true_world_plot.set_ylabel("Row")
     true_world_plot.legend()
 
-    # Draw the robot's occupancy map on the right.
-    map_plot = plt.subplot(1, 2, 2)
+    # Robot occupancy map
+    occupancy_plot = plt.subplot(1, 2, 2)
 
-    map_plot.imshow(
+    occupancy_plot.imshow(
         occupancy_map.grid,
         cmap=map_colors,
         vmin=-1,
@@ -85,26 +86,45 @@ def draw_simulation(
         origin="upper"
     )
 
-    map_plot.set_title(
-        "Robot Occupancy Map\n"
-        f"Explored: {occupancy_map.percent_explored():.1f}%"
-    )
+    # Draw all frontier cells.
+    if len(frontiers) > 0:
 
-    map_plot.set_xlabel("Column")
-    map_plot.set_ylabel("Row")
+        frontier_array = np.array(frontiers)
 
-    # Draw the currently planned path.
+        occupancy_plot.scatter(
+            frontier_array[:, 1],
+            frontier_array[:, 0],
+            marker=".",
+            s=25,
+            label="Frontiers"
+        )
+
+    # Draw selected exploration goal.
+    if selected_goal is not None:
+
+        goal_row, goal_col = selected_goal
+
+        occupancy_plot.scatter(
+            goal_col,
+            goal_row,
+            marker="*",
+            s=160,
+            label="Selected goal"
+        )
+
+    # Draw current path.
     if path is not None and len(path) > 0:
+
         path_array = np.array(path)
 
-        map_plot.plot(
+        occupancy_plot.plot(
             path_array[:, 1],
             path_array[:, 0],
             linewidth=2,
-            label="Current A* path"
+            label="Current path"
         )
 
-    map_plot.scatter(
+    occupancy_plot.scatter(
         robot_col,
         robot_row,
         marker="o",
@@ -112,7 +132,19 @@ def draw_simulation(
         label="Robot"
     )
 
-    map_plot.legend()
+    if victim_found:
+        status = "Victim detected"
+    else:
+        status = "Exploring"
+
+    occupancy_plot.set_title(
+        f"Robot Map: {status}\n"
+        f"Explored: {occupancy_map.percent_explored():.1f}%"
+    )
+
+    occupancy_plot.set_xlabel("Column")
+    occupancy_plot.set_ylabel("Row")
+    occupancy_plot.legend(loc="upper right")
 
     plt.suptitle(
         f"Step: {step_number} | "
@@ -120,10 +152,11 @@ def draw_simulation(
     )
 
     plt.tight_layout()
-    plt.pause(0.2)
+    plt.pause(0.15)
 
 
 def main():
+
     environment = Environment()
 
     occupancy_map = OccupancyMap(
@@ -136,37 +169,72 @@ def main():
     plt.figure(figsize=(14, 7))
 
     step_number = 0
-    max_steps = 500
+    max_steps = 1000
+    victim_found = False
 
-    while robot.position != VICTIM_POSITION:
+    while step_number < max_steps:
 
-        # The robot observes nearby cells.
+        # Reveal nearby cells.
         occupancy_map.update_from_sensor(
             environment,
             robot.position,
             ROBOT_SENSOR_RANGE
         )
 
-        # Replan using only the robot's current occupancy map.
-        path = astar(
-            robot.position,
-            VICTIM_POSITION,
-            occupancy_map.is_traversable
-        )
+        # Check whether the sensor has detected the victim.
+        known_victim_position = occupancy_map.find_known_victim()
 
-        if path is None:
-            print("No path could be found.")
-            break
+        if known_victim_position is not None:
 
-        robot.set_path(path)
+            victim_found = True
+
+            # Once detected, plan directly to the victim.
+            path = astar(
+                robot.position,
+                known_victim_position,
+                occupancy_map.is_known_traversable
+            )
+
+            frontiers = []
+            selected_goal = known_victim_position
+
+        else:
+
+            victim_found = False
+
+            # Find the known/unknown boundaries.
+            frontiers = find_frontiers(occupancy_map)
+
+            selected_goal, path = choose_frontier(
+                occupancy_map,
+                robot.position,
+                frontiers
+            )
 
         draw_simulation(
             environment,
             occupancy_map,
             robot,
             path,
-            step_number
+            frontiers,
+            selected_goal,
+            step_number,
+            victim_found
         )
+
+        # Stop once the robot reaches the detected victim.
+        if (
+            known_victim_position is not None
+            and robot.position == known_victim_position
+        ):
+            print("Victim reached!")
+            break
+
+        if path is None:
+            print("No reachable exploration target remains.")
+            break
+
+        robot.set_path(path)
 
         moved = robot.move_one_step()
 
@@ -176,31 +244,14 @@ def main():
 
         step_number += 1
 
-        if step_number >= max_steps:
-            print("Maximum number of steps reached.")
-            break
+    if step_number >= max_steps:
+        print("Maximum number of steps reached.")
 
-    # Perform one final scan at the destination.
     occupancy_map.update_from_sensor(
         environment,
         robot.position,
         ROBOT_SENSOR_RANGE
     )
-
-    final_path = [robot.position]
-
-    draw_simulation(
-        environment,
-        occupancy_map,
-        robot,
-        final_path,
-        step_number
-    )
-
-    if robot.position == VICTIM_POSITION:
-        print("Victim reached!")
-    else:
-        print("Victim was not reached.")
 
     print("Distance traveled:", robot.distance_traveled)
     print("Simulation steps:", step_number)
@@ -211,7 +262,7 @@ def main():
     )
 
     plt.savefig(
-        "outputs/phase3_occupancy_mapping.png",
+        "outputs/phase4_frontier_exploration.png",
         dpi=200
     )
 
