@@ -6,60 +6,84 @@ import numpy as np
 from config import ROBOT_START, VICTIM_POSITION
 from environment import Environment
 from planner import astar
+from robot import GroundRobot
 
 
-def visualize(environment: Environment, path: list[tuple[int, int]]):
+def visualize(environment, robot, path, step_number):
     # visualize environment and paths
-    figure, axis = plt.subplots(figsize=(10, 7))
+    plt.clf()
 
-    axis.imshow(environment.grid, origin="upper")
+    plt.imshow(environment.grid, origin="upper")
 
-    path_array = np.asarray(path)
-
-    axis.plot(
+    # planned path
+    path_array = np.array(path)
+    plt.plot(
         path_array[:, 1],
         path_array[:, 0],
         linewidth=2,
         label="A* path",
     )
 
-    axis.scatter(
-        ROBOT_START[1],
-        ROBOT_START[0],
+    robot_row, robot_col = robot.position
+    plt.scatter(
+        robot_col,
+        robot_row,
         marker="o",
         s=100,
         label="Ground robot",
     )
 
-    axis.scatter(
-        VICTIM_POSITION[1],
-        VICTIM_POSITION[0],
+    victim_row, victim_col = VICTIM_POSITION
+    plt.scatter(
+        victim_col,
+        victim_row,
         marker="x",
         s=120,
         label="Victim",
     )
 
-    axis.set_title("Ground Robot A*")
-    axis.set_xlabel("Column")
-    axis.set_ylabel("Row")
-    axis.legend()
-    axis.grid(True)
+    plt.title(f"Ground Robot Navigation\nStep: {step_number}, Distance: {robot.distance_traveled}")
+    plt.xlabel("Column")
+    plt.ylabel("Row")
+    plt.legend()
+    plt.grid(True)
 
-    figure.tight_layout()
-    figure.savefig("outputs/phase1_astar.png", dpi=200)
-    plt.show()
+    plt.pause(0.2)
 
 
 def main():
     environment = Environment()
+    robot = GroundRobot(ROBOT_START)
 
     path = astar(start=ROBOT_START, goal=VICTIM_POSITION, is_traversable=environment.is_traversable)
 
     if path is None:
-        raise RuntimeError("A* could not find a path")
+        print("No path found")
+        return
 
-    print(f"Path found with {len(path) - 1} moves.")
-    visualize(environment, path)
+    robot.set_path(path)
+
+    print("Starting simulation")
+    print(f"Path found with {len(path) - 1} moves")
+
+    plt.figure(figsize=(10, 7))
+    step_number = 0
+
+    visualize(environment, robot, path, step_number)
+
+    while not robot.reached_goal:
+        robot.move_one_step()
+        step_number += 1
+
+        visualize(environment, robot, path, step_number)
+    
+    print("Victim reached")
+    print("Total distance traveled:", robot.distance_traveled)
+    print("Total simulation steps:", step_number)
+
+    plt.savefig("outputs/phase2_robot_navigation.png", dpi=200)
+
+    plt.show()
 
 
 if __name__ == "__main__":
