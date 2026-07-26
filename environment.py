@@ -22,6 +22,11 @@ class Environment:
         self._add_boundaries()
         self._add_internal_obstacles()
         self._place_victim()
+        self.height_map = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=float)
+
+    def set_obstacle(self, row, col, height):
+        self.grid[row, col] = OBSTACLE
+        self.height_map[row, col] = height
 
     def _add_boundaries(self):
         # add walls as obstacles on edges
@@ -32,7 +37,6 @@ class Environment:
 
     def _add_internal_obstacles(self):
         # simulate obstacles/internal environment
-        # TODO: change from hardcoded
 
         # horizontal wall w/ doorway
         self.grid[6, 3:24] = OBSTACLE
