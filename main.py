@@ -109,7 +109,7 @@ def main():
             robot.position,
             ROBOT_SENSOR_RANGE
         )
-        path = astar(start=robot.position, goal=VICTIM_POSITION, is_traversable=environment.is_traversable)
+        path = astar(start=robot.position, goal=VICTIM_POSITION, is_traversable=occupancy_map.is_traversable)
         if path is None:
             print("No path found")
             break
@@ -124,6 +124,11 @@ def main():
             print("Robot could not move")
             break
 
+        step_number += 1
+
+        if step_number >= max_steps:
+            print("Maximum number of steps reached.")
+            break
     occupancy_map.update_from_sensor(environment, robot.position, ROBOT_SENSOR_RANGE)
 
     final_path = [robot.position]
@@ -140,7 +145,7 @@ def main():
     print("Total simulation steps:", step_number)
     print("Map explored:",f"{occupancy_map.percent_explored():.1f}%")
 
-    plt.savefig("outputs/occupancy_map.png", dpi=200)
+    plt.savefig("outputs/exploration_occupancy_map.png", dpi=200)
 
     plt.show()
 
