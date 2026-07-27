@@ -25,4 +25,4 @@ This project implements a multi-victim SAR simulator comparing three strategies:
 - Constant and score-based drone deployment
 - Mission metrics for victim detection, rescue, exploration, distance, energy, and drone deployments
 
-[Demo Link](https://youtu.be/44GyYag86Cg) : https://youtu.be/44GyYag86Cg
+[Demo Link](https://youtu.be/nm6Q0iDYfHk) : https://youtu.be/nm6Q0iDYfHk
