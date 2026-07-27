@@ -40,6 +40,7 @@ from config import (
 from environment import Environment
 from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
+from planner import astar
 from robot import GroundRobot
 from drone import Drone
 
@@ -381,6 +382,21 @@ def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
 
     return best_frontier
 
+def choose_victim_path(occupancy_map, robot_position, environment):
+    victim_positions = [ victim.position for victim in environment.victims if victim.detected and not victim.reached ]
+
+    if len(victim_positions) == 0:
+        return None, None
+
+    victim_positions.sort(key=lambda position: math.hypot(position[0] - robot_position[0],position[1] - robot_position[1]))
+
+    for victim_position in victim_positions:
+        path = astar(robot_position,victim_position,occupancy_map.is_traversable)
+
+        if path is not None:
+            return victim_position, path
+
+    return None, None
 
 def print_results(environment, occupancy_map, robot, drone, step_number, completion_reason):
     total_energy = robot.energy_used + drone.energy_used
@@ -389,7 +405,7 @@ def print_results(environment, occupancy_map, robot, drone, step_number, complet
     mission_time = min(mission_time, MISSION_TIME_LIMIT)
 
     victims_found = occupancy_map.count_detected_victims(environment)
-    victims_reached = occupancy_map.count_reached_victims(environment)
+    victims_reached = sum(victim.reached for victim in environment.victims)
     total_victims = len(environment.victims)
 
     print("\n------------------------------")
@@ -473,7 +489,19 @@ def main():
 
         frontiers = find_frontiers(occupancy_map)
 
-        selected_goal, path = choose_frontier(occupancy_map,robot.position,frontiers)
+        navigation_mode = "exploration"
+
+        victim_goal, victim_path = choose_victim_path(occupancy_map,robot.position,environment)
+
+        if victim_goal is not None:
+            selected_goal = victim_goal
+            path = victim_path
+            navigation_mode = "rescue"
+
+            print(f"Heading to victim at {victim_goal}")
+
+        else:
+            selected_goal, path = choose_frontier(occupancy_map,robot.position,frontiers)
 
         deployment_score = calculate_deployment_score(occupancy_map,robot.position,frontiers,exploration_history)
 
@@ -494,6 +522,7 @@ def main():
             and drone_cooldown == 0
             and ground_steps_since_deployment >= MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS
             and len(frontiers) > 0
+            and navigation_mode == "exploration"
         )
 
         if should_deploy:
@@ -505,10 +534,7 @@ def main():
                 if deployed:
                     ground_steps_since_deployment = 0
 
-                    print(
-                        f"Drone deployed to {drone_target} "
-                        f"with score {deployment_score:.2f}"
-                    )
+                    print(f"Drone deployed to {drone_target} with score {deployment_score:.2f}")
 
                     continue
 
