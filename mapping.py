@@ -22,9 +22,8 @@ class OccupancyMap:
 
                 row = robot_row + row_offset
                 col = robot_col + col_offset
-                position = (row, col)
 
-                if not environment.is_in_bounds(position):
+                if not environment.is_in_bounds(row, col):
                     continue
 
                 # circular sensing area

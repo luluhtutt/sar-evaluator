@@ -4,10 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import ListedColormap
 
-from config import (ROBOT_START,
-                    VICTIM_POSITION,
-                    GRID_HEIGHT,
-                    GRID_WIDTH,
+from config import (MAP_FILE,
                     ROBOT_SENSOR_RANGE,
                     DRONE_SENSOR_RANGE,
                     DRONE_DEPLOY_STEP)
@@ -63,7 +60,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             label=f"Drone z={drone_altitude:.1f}"
         )
 
-    victim_row, victim_col = VICTIM_POSITION
+    victim_row, victim_col = environment.victim_position
     true_world_plot.scatter(
         victim_col,
         victim_row,
@@ -157,9 +154,11 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
 
 def main():
-    environment = Environment()
-    occupancy_map = OccupancyMap(GRID_HEIGHT, GRID_WIDTH)
-    robot = GroundRobot(ROBOT_START)
+    environment = Environment(MAP_FILE)
+    grid_height, grid_width = environment.grid.shape
+
+    occupancy_map = OccupancyMap(grid_height, grid_width)
+    robot = GroundRobot(environment.robot_start)
     drone = Drone()
 
     plt.figure(figsize=(14, 7))
@@ -189,11 +188,7 @@ def main():
 
         # ground robot
 
-        occupancy_map.update_from_sensor(
-            environment,
-            robot.position,
-            ROBOT_SENSOR_RANGE
-        )
+        occupancy_map.update_from_sensor(environment, robot.position, ROBOT_SENSOR_RANGE)
 
         known_victim_position = occupancy_map.find_known_victim()
 
