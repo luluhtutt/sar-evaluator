@@ -16,7 +16,8 @@ from config import (
     EXPERIMENT_MODE,
     GROUND_ONLY,
     CONSTANT_DRONE,
-    LIMITED_DRONE
+    LIMITED_DRONE,
+    DRONE_CRUISE_ALTITUDE
 )
 from environment import Environment
 from exploration import find_frontiers, choose_frontier
@@ -29,36 +30,52 @@ from drone import Drone
 def visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number, victim_found):
     plt.clf()
 
-    map_colors = ListedColormap([
-        "gray", # unknown
-        "white", # free
-        "black", # obstacle
-        "red" #victim
-    ])
-
     robot_row, robot_col = robot.position
 
-    # plotting ground truth
-    true_world_plot = plt.subplot(1, 2, 1)
+    # ground truth
+    true_world_plot = plt.subplot(1, 2, 1, projection="3d")
 
-    true_world_plot.imshow(
-        environment.grid,
-        cmap=map_colors,
-        vmin=-1,
-        vmax=2,
-        origin="upper"
-    )
+    rows, cols = environment.grid.shape
 
-    true_world_plot.set_title("Ground Truth")
-    true_world_plot.set_xlabel("Column")
-    true_world_plot.set_ylabel("Row")
+    floor_x, floor_y = np.meshgrid(np.arange(cols), np.arange(rows))
+    floor_z = np.zeros_like(floor_x, dtype=float)
+
+    true_world_plot.plot_surface(floor_x, floor_y, floor_z, alpha=0.2)
+
+    obstacle_rows, obstacle_cols = np.where(environment.height_map > 0)
+
+    if len(obstacle_rows) > 0:
+        obstacle_heights = environment.height_map[obstacle_rows, obstacle_cols]
+
+        true_world_plot.bar3d(
+            obstacle_cols - 0.4,
+            obstacle_rows - 0.4,
+            np.zeros(len(obstacle_rows)),
+            0.8,
+            0.8,
+            obstacle_heights,
+            alpha=0.8,
+            label="Obstacles"
+        )
 
     true_world_plot.scatter(
         robot_col,
         robot_row,
+        0.2,
         marker="o",
         s=100,
         label="Robot"
+    )
+
+    victim_row, victim_col = environment.victim_position
+
+    true_world_plot.scatter(
+        victim_col,
+        victim_row,
+        0.2,
+        marker="x",
+        s=120,
+        label="Victim"
     )
 
     if drone.active and drone.position is not None:
@@ -67,6 +84,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
         true_world_plot.scatter(
             drone_col,
             drone_row,
+            drone_altitude,
             marker="^",
             s=120,
             label=f"Drone z={drone_altitude:.1f}"
@@ -74,44 +92,69 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
         heading_row, heading_col = drone.heading
 
-        true_world_plot.arrow(
+        true_world_plot.quiver(
             drone_col,
             drone_row,
-            heading_col * 1.25,
-            heading_row * 1.25,
-            width=0.04,
-            head_width=0.3,
-            length_includes_head=True
+            drone_altitude,
+            heading_col,
+            heading_row,
+            0,
+            length=1.5,
+            normalize=True
         )
 
         if len(drone.forward_obstacles) > 0:
             obstacle_array = np.array(drone.forward_obstacles)
+            detection_heights = environment.height_map[
+                obstacle_array[:, 0],
+                obstacle_array[:, 1]
+            ]
 
             true_world_plot.scatter(
                 obstacle_array[:, 1],
                 obstacle_array[:, 0],
+                detection_heights,
                 marker="s",
                 s=70,
-                facecolors="none",
-                edgecolors="orange",
-                linewidths=2,
                 label="Forward detections"
             )
 
-    victim_row, victim_col = environment.victim_position
+    if path is not None and len(path) > 0:
+        path_array = np.array(path)
 
-    true_world_plot.scatter(
-        victim_col,
-        victim_row,
-        marker="x",
-        s=120,
-        label="Victim"
+        true_world_plot.plot(
+            path_array[:, 1],
+            path_array[:, 0],
+            np.full(len(path_array), 0.1),
+            linewidth=2,
+            label="Ground path"
+        )
+
+    maximum_height = max(
+        DRONE_CRUISE_ALTITUDE + 2,
+        float(np.max(environment.height_map)) + 2
     )
 
-    true_world_plot.legend(loc="upper right")
+    true_world_plot.set_xlim(-0.5, cols - 0.5)
+    true_world_plot.set_ylim(rows - 0.5, -0.5)
+    true_world_plot.set_zlim(0, maximum_height)
 
-    # occupancy map
+    true_world_plot.set_xlabel("Column")
+    true_world_plot.set_ylabel("Row")
+    true_world_plot.set_zlabel("Height")
+    true_world_plot.set_title("3D Ground Truth")
+    true_world_plot.view_init(elev=35, azim=-60)
+    true_world_plot.legend()
+
+    # 2D occupancy map
     occupancy_plot = plt.subplot(1, 2, 2)
+
+    map_colors = ListedColormap([
+        "gray",
+        "white",
+        "black",
+        "red"
+    ])
 
     occupancy_plot.imshow(
         occupancy_map.grid,
@@ -185,12 +228,13 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
     occupancy_plot.set_xlabel("Column")
     occupancy_plot.set_ylabel("Row")
-    occupancy_plot.legend(loc="upper right")
+    occupancy_plot.legend()
 
     plt.suptitle(
         f"Mode: {EXPERIMENT_MODE} | Step: {step_number} | Status: {status}\n"
         f"Ground distance: {robot.distance_traveled:.1f} | "
-        f"Drone deployments: {drone.deployments_used}"
+        f"Drone distance: {drone.distance_traveled:.1f} | "
+        f"Deployments: {drone.deployments_used}"
     )
 
     plt.tight_layout()
