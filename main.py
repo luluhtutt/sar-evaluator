@@ -453,7 +453,25 @@ def main():
 
         percent_explored = occupancy_map.percent_explored()
 
-        if percent_explored >= EXPLORATION_COMPLETE_PERCENT:
+        unreached_detected_victims = [
+            victim
+            for victim in environment.victims
+            if victim.detected and not victim.reached
+        ]
+
+        all_victims_reached = all(
+            victim.reached
+            for victim in environment.victims
+        )
+
+        if all_victims_reached:
+            completion_reason = "all_victims_rescued"
+            break
+
+        if (
+            percent_explored >= EXPLORATION_COMPLETE_PERCENT
+            and len(unreached_detected_victims) == 0
+        ):
             completion_reason = "95_percent_explored"
             break
 
@@ -484,7 +502,25 @@ def main():
         if len(exploration_history) > PROGRESS_WINDOW:
             exploration_history.pop(0)
 
-        if percent_explored >= EXPLORATION_COMPLETE_PERCENT:
+        unreached_detected_victims = [
+            victim
+            for victim in environment.victims
+            if victim.detected and not victim.reached
+        ]
+
+        all_victims_reached = all(
+            victim.reached
+            for victim in environment.victims
+        )
+
+        if all_victims_reached:
+            completion_reason = "all_victims_rescued"
+            break
+
+        if (
+            percent_explored >= EXPLORATION_COMPLETE_PERCENT
+            and len(unreached_detected_victims) == 0
+        ):
             completion_reason = "95_percent_explored"
             break
 

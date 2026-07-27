@@ -1,4 +1,4 @@
-MAP_FILE = "maps/map4.txt"
+MAP_FILE = "maps/map7.txt"
 
 # cell values
 UNKNOWN = -1
