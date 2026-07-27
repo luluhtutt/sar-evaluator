@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import ListedColormap
@@ -19,6 +21,7 @@ from config import (
     LIMITED_DRONE,
     DRONE_CRUISE_ALTITUDE
 )
+
 from environment import Environment
 from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
@@ -28,19 +31,28 @@ from drone import Drone
 
 
 def visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number, victim_found):
+    current_azimuth = None
+    current_elevation = None
+
+    if len(plt.gcf().axes) > 0:
+        old_axis = plt.gcf().axes[0]
+
+        if hasattr(old_axis, "azim"):
+            current_azimuth = old_axis.azim
+            current_elevation = old_axis.elev
+
     plt.clf()
 
     robot_row, robot_col = robot.position
+    rows, cols = environment.grid.shape
 
     # ground truth
     true_world_plot = plt.subplot(1, 2, 1, projection="3d")
 
-    rows, cols = environment.grid.shape
-
     floor_x, floor_y = np.meshgrid(np.arange(cols), np.arange(rows))
     floor_z = np.zeros_like(floor_x, dtype=float)
 
-    true_world_plot.plot_surface(floor_x, floor_y, floor_z, alpha=0.2)
+    true_world_plot.plot_surface(floor_x, floor_y, floor_z, alpha=0.15)
 
     obstacle_rows, obstacle_cols = np.where(environment.height_map > 0)
 
@@ -54,17 +66,26 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             0.8,
             0.8,
             obstacle_heights,
-            alpha=0.8,
+            alpha=0.35,
             label="Obstacles"
         )
 
     true_world_plot.scatter(
         robot_col,
         robot_row,
-        0.2,
+        0.4,
         marker="o",
-        s=100,
+        s=140,
+        depthshade=False,
         label="Robot"
+    )
+
+    true_world_plot.plot(
+        [robot_col, robot_col],
+        [robot_row, robot_row],
+        [0, 1.5],
+        linestyle="--",
+        linewidth=2
     )
 
     victim_row, victim_col = environment.victim_position
@@ -72,9 +93,10 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     true_world_plot.scatter(
         victim_col,
         victim_row,
-        0.2,
+        0.4,
         marker="x",
-        s=120,
+        s=140,
+        depthshade=False,
         label="Victim"
     )
 
@@ -86,7 +108,8 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             drone_row,
             drone_altitude,
             marker="^",
-            s=120,
+            s=140,
+            depthshade=False,
             label=f"Drone z={drone_altitude:.1f}"
         )
 
@@ -105,6 +128,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
         if len(drone.forward_obstacles) > 0:
             obstacle_array = np.array(drone.forward_obstacles)
+
             detection_heights = environment.height_map[
                 obstacle_array[:, 0],
                 obstacle_array[:, 1]
@@ -113,9 +137,10 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             true_world_plot.scatter(
                 obstacle_array[:, 1],
                 obstacle_array[:, 0],
-                detection_heights,
+                detection_heights + 0.2,
                 marker="s",
-                s=70,
+                s=90,
+                depthshade=False,
                 label="Forward detections"
             )
 
@@ -143,7 +168,12 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     true_world_plot.set_ylabel("Row")
     true_world_plot.set_zlabel("Height")
     true_world_plot.set_title("3D Ground Truth")
-    true_world_plot.view_init(elev=35, azim=-60)
+
+    if current_azimuth is not None and current_elevation is not None:
+        true_world_plot.view_init(elev=current_elevation, azim=current_azimuth)
+    else:
+        true_world_plot.view_init(elev=35, azim=-60)
+
     true_world_plot.legend()
 
     # 2D occupancy map
@@ -301,6 +331,7 @@ def main():
     robot = GroundRobot(environment.robot_start)
     drone = Drone()
 
+    plt.ion()
     plt.figure(figsize=(14, 7))
 
     step_number = 0
@@ -314,7 +345,6 @@ def main():
 
     while step_number < MAX_SIMULATION_STEPS:
 
-        # drone gets the full simulation step while active
         if drone.active:
             drone.move_one_step(environment)
 
@@ -349,7 +379,6 @@ def main():
         if drone_cooldown > 0:
             drone_cooldown -= 1
 
-        # ground robot senses nearby cells
         occupancy_map.update_from_sensor(
             environment,
             robot.position,
@@ -358,7 +387,6 @@ def main():
 
         known_victim_position = occupancy_map.find_known_victim()
 
-        # plan directly to the victim once it is known
         if known_victim_position is not None:
             victim_found = True
 
@@ -371,7 +399,6 @@ def main():
             frontiers = []
             selected_goal = known_victim_position
 
-        # continue frontier exploration
         else:
             victim_found = False
             frontiers = find_frontiers(occupancy_map)
@@ -461,6 +488,7 @@ def main():
 
     print("Saved final visualization to:", output_file)
 
+    plt.ioff()
     plt.show()
 
 
