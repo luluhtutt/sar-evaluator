@@ -13,13 +13,13 @@ from config import (
     DRONE_SENSOR_RANGE,
     DRONE_DEPLOY_STEP,
     DRONE_REDEPLOY_COOLDOWN,
-    MAX_DRONE_DEPLOYMENTS,
+    MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS,
     MAX_SIMULATION_STEPS,
     VISUALIZATION_DELAY,
     EXPERIMENT_MODE,
     GROUND_ONLY,
     CONSTANT_DRONE,
-    LIMITED_DRONE,
+    SMART_DRONE,
     DRONE_CRUISE_ALTITUDE,
     SMART_DEPLOYMENT_THRESHOLD,
     FRONTIER_COUNT_WEIGHT,
@@ -59,7 +59,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     robot_row, robot_col = robot.position
     rows, cols = environment.grid.shape
 
-    # ground truth
+    # 3D ground-truth plot
     true_world_plot = plt.subplot(1, 2, 1, projection="3d")
 
     floor_x, floor_y = np.meshgrid(np.arange(cols), np.arange(rows))
@@ -280,15 +280,12 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     plt.pause(VISUALIZATION_DELAY)
 
 
-def deployment_is_allowed(drone):
+def deployment_is_allowed():
     if EXPERIMENT_MODE == GROUND_ONLY:
         return False
 
-    if EXPERIMENT_MODE == CONSTANT_DRONE:
+    if EXPERIMENT_MODE in (CONSTANT_DRONE, SMART_DRONE):
         return True
-
-    if EXPERIMENT_MODE == LIMITED_DRONE:
-        return drone.deployments_used < MAX_DRONE_DEPLOYMENTS
 
     raise ValueError(f"Unknown experiment mode: {EXPERIMENT_MODE}")
 
@@ -298,7 +295,6 @@ def robot_is_stuck(exploration_history):
         return False
 
     progress = exploration_history[-1] - exploration_history[0]
-
     return progress < MIN_PROGRESS_PERCENT
 
 
@@ -412,7 +408,9 @@ def main():
     path = None
     frontiers = []
     selected_goal = None
+
     exploration_history = []
+    ground_steps_since_deployment = MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS
 
     while step_number < MAX_SIMULATION_STEPS:
 
@@ -497,20 +495,24 @@ def main():
         )
 
         if EXPERIMENT_MODE == CONSTANT_DRONE:
-            smart_trigger = True
-        elif EXPERIMENT_MODE == LIMITED_DRONE:
-            smart_trigger = deployment_score >= SMART_DEPLOYMENT_THRESHOLD
+            deployment_trigger = True
+        elif EXPERIMENT_MODE == SMART_DRONE:
+            deployment_trigger = deployment_score >= SMART_DEPLOYMENT_THRESHOLD
         else:
-            smart_trigger = False
+            deployment_trigger = False
 
-        if EXPERIMENT_MODE == LIMITED_DRONE and known_victim_position is None:
-            print(f"Deployment score: {deployment_score:.2f}")
+        if EXPERIMENT_MODE == SMART_DRONE and known_victim_position is None:
+            print(
+                f"Deployment score: {deployment_score:.2f} | "
+                f"Ground steps since deployment: {ground_steps_since_deployment}"
+            )
 
         should_deploy = (
             step_number >= DRONE_DEPLOY_STEP
-            and deployment_is_allowed(drone)
-            and smart_trigger
+            and deployment_is_allowed()
+            and deployment_trigger
             and drone_cooldown == 0
+            and ground_steps_since_deployment >= MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS
             and known_victim_position is None
             and len(frontiers) > 0
         )
@@ -527,7 +529,13 @@ def main():
                 deployed = drone.deploy(robot.position, drone_target)
 
                 if deployed:
-                    print(f"Smart deployment triggered with score {deployment_score:.2f}")
+                    ground_steps_since_deployment = 0
+
+                    print(
+                        f"Drone deployed to {drone_target} "
+                        f"with score {deployment_score:.2f}"
+                    )
+
                     continue
 
         visualize(
@@ -559,6 +567,7 @@ def main():
             print("Robot could not move.")
             break
 
+        ground_steps_since_deployment += 1
         step_number += 1
 
     if step_number >= MAX_SIMULATION_STEPS:
@@ -593,3 +602,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
