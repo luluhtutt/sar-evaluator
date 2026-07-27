@@ -1,3 +1,5 @@
+from config import GROUND_MOVE_ENERGY
+import math
 
 class GroundRobot:
 
@@ -5,8 +7,9 @@ class GroundRobot:
         self.position = start_position
         self.path = []
         self.path_index = 0
-        self.distance_traveled = 0
+        self.distance_traveled = 0.0
         self.reached_goal = False
+        self.energy_used = 0.0
 
     def set_path(self, path):
         # path for robot to follow
@@ -21,15 +24,19 @@ class GroundRobot:
         self.path_index = 1
 
     def move_one_step(self):
-
         if self.path_index >= len(self.path):
             return False
 
-        next_position = self.path[self.path_index]
+        old_row, old_col = self.position
+        new_row, new_col = self.path[self.path_index]
 
-        self.position = next_position
+        self.position = (new_row, new_col)
         self.path_index += 1
-        self.distance_traveled += 1
+
+        step_distance = math.hypot(new_row - old_row, new_col - old_col)
+
+        self.distance_traveled += step_distance
+        self.energy_used += GROUND_MOVE_ENERGY * step_distance
 
         return True
     
