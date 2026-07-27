@@ -1,4 +1,4 @@
-MAP_FILE = "maps/map1.txt"
+MAP_FILE = "maps/map4.txt"
 
 # cell values
 UNKNOWN = -1
@@ -16,7 +16,7 @@ SMART_DRONE = "smart_drone"
 EXPERIMENT_MODE = GROUND_ONLY
 
 # simulation
-MISSION_TIME_LIMIT = 120.0
+MISSION_TIME_LIMIT = 200.0
 EXPLORATION_COMPLETE_PERCENT = 95.0
 VISUALIZATION_DELAY = 0.01
 

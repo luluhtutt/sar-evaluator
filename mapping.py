@@ -56,6 +56,17 @@ class OccupancyMap:
         self.grid[row, col] = FREE
 
         return True
+    
+    def mark_victim_reached(self, environment, position):
+        victim = environment.get_victim_at_position(position)
+
+        if victim is None:
+            return False
+
+        victim.detected = True
+        victim.reached = True
+
+        return True
 
     def get_detected_victims(self):
         return sorted(self.detected_victims)

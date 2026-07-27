@@ -63,6 +63,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
     # 3D ground-truth plot
     true_world_plot = plt.subplot(1, 2, 1, projection="3d")
+    true_world_plot.format_coord = lambda x, y: ""
 
     floor_x, floor_y = np.meshgrid(np.arange(cols), np.arange(rows))
     floor_z = np.zeros_like(floor_x, dtype=float)
