@@ -1,0 +1,6 @@
+.  free space
+#  normal wall, height 3.0
+r  low rubble, height 1.5
+T  tall obstacle, height 5.0
+S  robot start
+V  victim

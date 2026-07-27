@@ -1,3 +1,5 @@
+MAP_FILE = "maps/map_01.txt"
+
 GRID_HEIGHT = 20
 GRID_WIDTH = 30
 
