@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 
 import matplotlib.pyplot as plt
@@ -19,7 +20,19 @@ from config import (
     GROUND_ONLY,
     CONSTANT_DRONE,
     LIMITED_DRONE,
-    DRONE_CRUISE_ALTITUDE
+    DRONE_CRUISE_ALTITUDE,
+    SMART_DEPLOYMENT_THRESHOLD,
+    FRONTIER_COUNT_WEIGHT,
+    FRONTIER_DISTANCE_WEIGHT,
+    UNKNOWN_PERCENT_WEIGHT,
+    NO_PROGRESS_WEIGHT,
+    DRONE_DEPLOYMENT_COST,
+    PROGRESS_WINDOW,
+    MIN_PROGRESS_PERCENT,
+    DRONE_INFORMATION_GAIN_WEIGHT,
+    DRONE_DISTANCE_WEIGHT,
+    DRONE_INFORMATION_RADIUS,
+    UNKNOWN
 )
 
 from environment import Environment
@@ -128,11 +141,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
 
         if len(drone.forward_obstacles) > 0:
             obstacle_array = np.array(drone.forward_obstacles)
-
-            detection_heights = environment.height_map[
-                obstacle_array[:, 0],
-                obstacle_array[:, 1]
-            ]
+            detection_heights = environment.height_map[obstacle_array[:, 0], obstacle_array[:, 1]]
 
             true_world_plot.scatter(
                 obstacle_array[:, 1],
@@ -284,6 +293,55 @@ def deployment_is_allowed(drone):
     raise ValueError(f"Unknown experiment mode: {EXPERIMENT_MODE}")
 
 
+def robot_is_stuck(exploration_history):
+    if len(exploration_history) < PROGRESS_WINDOW:
+        return False
+
+    progress = exploration_history[-1] - exploration_history[0]
+
+    return progress < MIN_PROGRESS_PERCENT
+
+
+def calculate_deployment_score(occupancy_map, robot_position, frontiers, exploration_history):
+    if len(frontiers) == 0:
+        return -float("inf")
+
+    nearest_frontier_distance = min(
+        math.hypot(frontier[0] - robot_position[0], frontier[1] - robot_position[1])
+        for frontier in frontiers
+    )
+
+    unknown_percent = 100.0 - occupancy_map.percent_explored()
+
+    score = FRONTIER_COUNT_WEIGHT * len(frontiers)
+    score += FRONTIER_DISTANCE_WEIGHT * nearest_frontier_distance
+    score += UNKNOWN_PERCENT_WEIGHT * unknown_percent
+    score -= DRONE_DEPLOYMENT_COST
+
+    if robot_is_stuck(exploration_history):
+        score += NO_PROGRESS_WEIGHT
+
+    return score
+
+
+def count_unknown_neighbors(occupancy_map, frontier):
+    frontier_row, frontier_col = frontier
+    unknown_count = 0
+
+    for row in range(frontier_row - DRONE_INFORMATION_RADIUS, frontier_row + DRONE_INFORMATION_RADIUS + 1):
+        for col in range(frontier_col - DRONE_INFORMATION_RADIUS, frontier_col + DRONE_INFORMATION_RADIUS + 1):
+            if row < 0 or row >= occupancy_map.grid.shape[0]:
+                continue
+
+            if col < 0 or col >= occupancy_map.grid.shape[1]:
+                continue
+
+            if occupancy_map.grid[row, col] == UNKNOWN:
+                unknown_count += 1
+
+    return unknown_count
+
+
 def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
     available_frontiers = [
         frontier
@@ -294,13 +352,25 @@ def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
     if len(available_frontiers) == 0:
         return None
 
-    selected_goal, _ = choose_frontier(
-        occupancy_map,
-        robot_position,
-        available_frontiers
-    )
+    best_frontier = None
+    best_score = -float("inf")
 
-    return selected_goal
+    for frontier in available_frontiers:
+        information_gain = count_unknown_neighbors(occupancy_map, frontier)
+
+        distance = math.hypot(
+            frontier[0] - robot_position[0],
+            frontier[1] - robot_position[1]
+        )
+
+        score = DRONE_INFORMATION_GAIN_WEIGHT * information_gain
+        score += DRONE_DISTANCE_WEIGHT * distance
+
+        if score > best_score:
+            best_score = score
+            best_frontier = frontier
+
+    return best_frontier
 
 
 def print_results(occupancy_map, robot, drone, step_number, victim_reached):
@@ -342,9 +412,11 @@ def main():
     path = None
     frontiers = []
     selected_goal = None
+    exploration_history = []
 
     while step_number < MAX_SIMULATION_STEPS:
 
+        # The drone gets the full simulation step while it is active.
         if drone.active:
             drone.move_one_step(environment)
 
@@ -379,14 +451,21 @@ def main():
         if drone_cooldown > 0:
             drone_cooldown -= 1
 
+        # Ground robot sensing
         occupancy_map.update_from_sensor(
             environment,
             robot.position,
             ROBOT_SENSOR_RANGE
         )
 
+        exploration_history.append(occupancy_map.percent_explored())
+
+        if len(exploration_history) > PROGRESS_WINDOW:
+            exploration_history.pop(0)
+
         known_victim_position = occupancy_map.find_known_victim()
 
+        # Plan directly to the victim once it is known.
         if known_victim_position is not None:
             victim_found = True
 
@@ -399,6 +478,7 @@ def main():
             frontiers = []
             selected_goal = known_victim_position
 
+        # Otherwise, continue frontier exploration.
         else:
             victim_found = False
             frontiers = find_frontiers(occupancy_map)
@@ -409,9 +489,27 @@ def main():
                 frontiers
             )
 
+        deployment_score = calculate_deployment_score(
+            occupancy_map,
+            robot.position,
+            frontiers,
+            exploration_history
+        )
+
+        if EXPERIMENT_MODE == CONSTANT_DRONE:
+            smart_trigger = True
+        elif EXPERIMENT_MODE == LIMITED_DRONE:
+            smart_trigger = deployment_score >= SMART_DEPLOYMENT_THRESHOLD
+        else:
+            smart_trigger = False
+
+        if EXPERIMENT_MODE == LIMITED_DRONE and known_victim_position is None:
+            print(f"Deployment score: {deployment_score:.2f}")
+
         should_deploy = (
             step_number >= DRONE_DEPLOY_STEP
             and deployment_is_allowed(drone)
+            and smart_trigger
             and drone_cooldown == 0
             and known_victim_position is None
             and len(frontiers) > 0
@@ -429,6 +527,7 @@ def main():
                 deployed = drone.deploy(robot.position, drone_target)
 
                 if deployed:
+                    print(f"Smart deployment triggered with score {deployment_score:.2f}")
                     continue
 
         visualize(
