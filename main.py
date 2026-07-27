@@ -10,11 +10,13 @@ from matplotlib.colors import ListedColormap
 from config import (
     MAP_FILE,
     ROBOT_SENSOR_RANGE,
-    DRONE_SENSOR_RANGE,
     DRONE_DEPLOY_STEP,
     DRONE_REDEPLOY_COOLDOWN,
     MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS,
     MAX_SIMULATION_STEPS,
+    SIMULATION_STEP_SECONDS,
+    MISSION_TIME_LIMIT,
+    EXPLORATION_COMPLETE_PERCENT,
     VISUALIZATION_DELAY,
     EXPERIMENT_MODE,
     GROUND_ONLY,
@@ -38,12 +40,11 @@ from config import (
 from environment import Environment
 from exploration import find_frontiers, choose_frontier
 from mapping import OccupancyMap
-from planner import astar
 from robot import GroundRobot
 from drone import Drone
 
 
-def visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number, victim_found):
+def visualize(environment, occupancy_map, robot, drone, path, frontiers, selected_goal, step_number):
     current_azimuth = None
     current_elevation = None
 
@@ -101,17 +102,28 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
         linewidth=2
     )
 
-    victim_row, victim_col = environment.victim_position
+    for victim in environment.victims:
+        victim_row, victim_col = victim.position
 
-    true_world_plot.scatter(
-        victim_col,
-        victim_row,
-        0.4,
-        marker="x",
-        s=140,
-        depthshade=False,
-        label="Victim"
-    )
+        if victim.reached:
+            victim_label = "Victim reached"
+            victim_marker = "P"
+        elif victim.detected:
+            victim_label = "Victim detected"
+            victim_marker = "x"
+        else:
+            victim_label = "Victim"
+            victim_marker = "x"
+
+        true_world_plot.scatter(
+            victim_col,
+            victim_row,
+            0.4,
+            marker=victim_marker,
+            s=140,
+            depthshade=False,
+            label=victim_label
+        )
 
     if drone.active and drone.position is not None:
         drone_row, drone_col, drone_altitude = drone.position
@@ -164,10 +176,7 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             label="Ground path"
         )
 
-    maximum_height = max(
-        DRONE_CRUISE_ALTITUDE + 2,
-        float(np.max(environment.height_map)) + 2
-    )
+    maximum_height = max(DRONE_CRUISE_ALTITUDE + 2,float(np.max(environment.height_map)) + 2)
 
     true_world_plot.set_xlim(-0.5, cols - 0.5)
     true_world_plot.set_ylim(rows - 0.5, -0.5)
@@ -191,15 +200,14 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
     map_colors = ListedColormap([
         "gray",
         "white",
-        "black",
-        "red"
+        "black"
     ])
 
     occupancy_plot.imshow(
         occupancy_map.grid,
         cmap=map_colors,
         vmin=-1,
-        vmax=2,
+        vmax=1,
         origin="upper"
     )
 
@@ -243,6 +251,19 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
         label="Robot"
     )
 
+    detected_victims = occupancy_map.get_detected_victims()
+
+    if len(detected_victims) > 0:
+        detected_array = np.array(detected_victims)
+
+        occupancy_plot.scatter(
+            detected_array[:, 1],
+            detected_array[:, 0],
+            marker="x",
+            s=120,
+            label="Detected victims"
+        )
+
     if drone.active and drone.position is not None:
         drone_row, drone_col, drone_altitude = drone.position
 
@@ -254,23 +275,25 @@ def visualize(environment, occupancy_map, robot, drone, path, frontiers, selecte
             label=f"Drone z={drone_altitude:.1f}"
         )
 
-    if victim_found:
-        status = "Victim detected"
-    elif drone.active:
+    victims_found = occupancy_map.count_detected_victims(environment)
+    total_victims = len(environment.victims)
+
+    if drone.active:
         status = "Aerial scout active"
     else:
-        status = "Ground robot exploring"
+        status = "Searching for victims"
 
-    occupancy_plot.set_title(
-        f"Robot Occupancy Map\nExplored: {occupancy_map.percent_explored():.1f}%"
-    )
+    occupancy_plot.set_title(f"Robot Occupancy Map\nExplored: {occupancy_map.percent_explored():.1f}% | Victims found: {victims_found}/{total_victims}")
 
     occupancy_plot.set_xlabel("Column")
     occupancy_plot.set_ylabel("Row")
     occupancy_plot.legend()
 
+    mission_time = step_number * SIMULATION_STEP_SECONDS
+
     plt.suptitle(
-        f"Mode: {EXPERIMENT_MODE} | Step: {step_number} | Status: {status}\n"
+        f"Mode: {EXPERIMENT_MODE} | Time: {mission_time:.1f} s | Status: {status}\n"
+        f"Victims found: {victims_found}/{total_victims} | "
         f"Ground distance: {robot.distance_traveled:.1f} | "
         f"Drone distance: {drone.distance_traveled:.1f} | "
         f"Deployments: {drone.deployments_used}"
@@ -302,10 +325,7 @@ def calculate_deployment_score(occupancy_map, robot_position, frontiers, explora
     if len(frontiers) == 0:
         return -float("inf")
 
-    nearest_frontier_distance = min(
-        math.hypot(frontier[0] - robot_position[0], frontier[1] - robot_position[1])
-        for frontier in frontiers
-    )
+    nearest_frontier_distance = min(math.hypot(frontier[0] - robot_position[0], frontier[1] - robot_position[1]) for frontier in frontiers)
 
     unknown_percent = 100.0 - occupancy_map.percent_explored()
 
@@ -339,11 +359,7 @@ def count_unknown_neighbors(occupancy_map, frontier):
 
 
 def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
-    available_frontiers = [
-        frontier
-        for frontier in frontiers
-        if frontier not in drone.visited_targets
-    ]
+    available_frontiers = [frontier for frontier in frontiers if frontier not in drone.visited_targets]
 
     if len(available_frontiers) == 0:
         return None
@@ -354,10 +370,7 @@ def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
     for frontier in available_frontiers:
         information_gain = count_unknown_neighbors(occupancy_map, frontier)
 
-        distance = math.hypot(
-            frontier[0] - robot_position[0],
-            frontier[1] - robot_position[1]
-        )
+        distance = math.hypot(frontier[0] - robot_position[0],frontier[1] - robot_position[1])
 
         score = DRONE_INFORMATION_GAIN_WEIGHT * information_gain
         score += DRONE_DISTANCE_WEIGHT * distance
@@ -369,24 +382,32 @@ def choose_drone_frontier(occupancy_map, robot_position, frontiers, drone):
     return best_frontier
 
 
-def print_results(occupancy_map, robot, drone, step_number, victim_reached):
+def print_results(environment, occupancy_map, robot, drone, step_number, completion_reason):
     total_energy = robot.energy_used + drone.energy_used
+
+    mission_time = step_number * SIMULATION_STEP_SECONDS
+    mission_time = min(mission_time, MISSION_TIME_LIMIT)
+
+    victims_found = occupancy_map.count_detected_victims(environment)
+    victims_reached = occupancy_map.count_reached_victims(environment)
+    total_victims = len(environment.victims)
 
     print("\n------------------------------")
     print("Mission Results")
     print("------------------------------")
     print("Experiment mode:", EXPERIMENT_MODE)
-    print("Victim reached:", victim_reached)
-    print("Total simulation steps:", step_number)
+    print("Completion reason:", completion_reason)
+    print("Mission time:", f"{mission_time:.1f} seconds")
+    print("Victims found:", f"{victims_found} / {total_victims}")
+    print("Victims reached:", f"{victims_reached} / {total_victims}")
+    print("Map explored:", f"{occupancy_map.percent_explored():.1f}%")
     print("Ground distance traveled:", f"{robot.distance_traveled:.2f}")
     print("Drone distance traveled:", f"{drone.distance_traveled:.2f}")
     print("Drone deployments:", drone.deployments_used)
     print("Ground energy:", f"{robot.energy_used:.2f}")
     print("Drone energy:", f"{drone.energy_used:.2f}")
     print("Total normalized energy:", f"{total_energy:.2f}")
-    print("Map explored:", f"{occupancy_map.percent_explored():.1f}%")
     print("------------------------------")
-
 
 def main():
     environment = Environment(MAP_FILE)
@@ -401,8 +422,7 @@ def main():
     plt.figure(figsize=(14, 7))
 
     step_number = 0
-    victim_found = False
-    victim_reached = False
+    completion_reason = "time_limit"
     drone_cooldown = 0
 
     path = None
@@ -414,30 +434,17 @@ def main():
 
     while step_number < MAX_SIMULATION_STEPS:
 
+        percent_explored = occupancy_map.percent_explored()
+
+        if percent_explored >= EXPLORATION_COMPLETE_PERCENT:
+            completion_reason = "95_percent_explored"
+            break
+
         # The drone gets the full simulation step while it is active.
         if drone.active:
-            drone.move_one_step(environment)
+            drone.move_one_step(environment, occupancy_map)
 
-            if drone.state in ("flying", "scanning") and drone.position is not None:
-                drone_row, drone_col, drone_altitude = drone.position
-
-                occupancy_map.update_from_sensor(
-                    environment,
-                    (int(round(drone_row)), int(round(drone_col))),
-                    DRONE_SENSOR_RANGE
-                )
-
-            visualize(
-                environment,
-                occupancy_map,
-                robot,
-                drone,
-                None,
-                [],
-                drone.target,
-                step_number,
-                victim_found
-            )
+            visualize(environment,occupancy_map,robot,drone,None,[],drone.target,step_number)
 
             if drone.state == "finished":
                 drone.finish_mission()
@@ -450,49 +457,25 @@ def main():
             drone_cooldown -= 1
 
         # Ground robot sensing
-        occupancy_map.update_from_sensor(
-            environment,
-            robot.position,
-            ROBOT_SENSOR_RANGE
-        )
+        occupancy_map.update_from_sensor(environment,robot.position,ROBOT_SENSOR_RANGE)
 
-        exploration_history.append(occupancy_map.percent_explored())
+        robot.rescue_victim(environment, occupancy_map)
+
+        percent_explored = occupancy_map.percent_explored()
+        exploration_history.append(percent_explored)
 
         if len(exploration_history) > PROGRESS_WINDOW:
             exploration_history.pop(0)
 
-        known_victim_position = occupancy_map.find_known_victim()
+        if percent_explored >= EXPLORATION_COMPLETE_PERCENT:
+            completion_reason = "95_percent_explored"
+            break
 
-        # Plan directly to the victim once it is known.
-        if known_victim_position is not None:
-            victim_found = True
+        frontiers = find_frontiers(occupancy_map)
 
-            path = astar(
-                start=robot.position,
-                goal=known_victim_position,
-                is_traversable=occupancy_map.is_traversable
-            )
+        selected_goal, path = choose_frontier(occupancy_map,robot.position,frontiers)
 
-            frontiers = []
-            selected_goal = known_victim_position
-
-        # Otherwise, continue frontier exploration.
-        else:
-            victim_found = False
-            frontiers = find_frontiers(occupancy_map)
-
-            selected_goal, path = choose_frontier(
-                occupancy_map,
-                robot.position,
-                frontiers
-            )
-
-        deployment_score = calculate_deployment_score(
-            occupancy_map,
-            robot.position,
-            frontiers,
-            exploration_history
-        )
+        deployment_score = calculate_deployment_score(occupancy_map,robot.position,frontiers,exploration_history)
 
         if EXPERIMENT_MODE == CONSTANT_DRONE:
             deployment_trigger = True
@@ -501,11 +484,8 @@ def main():
         else:
             deployment_trigger = False
 
-        if EXPERIMENT_MODE == SMART_DRONE and known_victim_position is None:
-            print(
-                f"Deployment score: {deployment_score:.2f} | "
-                f"Ground steps since deployment: {ground_steps_since_deployment}"
-            )
+        if EXPERIMENT_MODE == SMART_DRONE:
+            print(f"Deployment score: {deployment_score:.2f} | Ground steps since deployment: {ground_steps_since_deployment}")
 
         should_deploy = (
             step_number >= DRONE_DEPLOY_STEP
@@ -513,17 +493,11 @@ def main():
             and deployment_trigger
             and drone_cooldown == 0
             and ground_steps_since_deployment >= MIN_GROUND_STEPS_BETWEEN_DEPLOYMENTS
-            and known_victim_position is None
             and len(frontiers) > 0
         )
 
         if should_deploy:
-            drone_target = choose_drone_frontier(
-                occupancy_map,
-                robot.position,
-                frontiers,
-                drone
-            )
+            drone_target = choose_drone_frontier(occupancy_map,robot.position,frontiers,drone)
 
             if drone_target is not None:
                 deployed = drone.deploy(robot.position, drone_target)
@@ -538,25 +512,18 @@ def main():
 
                     continue
 
-        visualize(
-            environment,
-            occupancy_map,
-            robot,
-            drone,
-            path,
-            frontiers,
-            selected_goal,
-            step_number,
-            victim_found
-        )
-
-        if known_victim_position is not None and robot.position == known_victim_position:
-            print("Victim reached.")
-            victim_reached = True
-            break
+        visualize(environment,occupancy_map,robot,drone,path,frontiers,selected_goal,step_number)
 
         if path is None or len(path) == 0:
             print("No reachable path or frontier was found.")
+
+            percent_explored = occupancy_map.percent_explored()
+
+            if percent_explored >= EXPLORATION_COMPLETE_PERCENT:
+                completion_reason = "95_percent_explored"
+            else:
+                completion_reason = "no_reachable_frontier"
+
             break
 
         robot.set_path(path)
@@ -565,32 +532,32 @@ def main():
 
         if not moved:
             print("Robot could not move.")
+            completion_reason = "robot_could_not_move"
             break
+
+        robot.rescue_victim(environment, occupancy_map)
 
         ground_steps_since_deployment += 1
         step_number += 1
 
     if step_number >= MAX_SIMULATION_STEPS:
-        print("Maximum number of simulation steps reached.")
+        completion_reason = "time_limit"
+        print("Mission time limit reached.")
 
-    occupancy_map.update_from_sensor(
-        environment,
-        robot.position,
-        ROBOT_SENSOR_RANGE
-    )
+    occupancy_map.update_from_sensor(environment,robot.position,ROBOT_SENSOR_RANGE)
 
-    print_results(
-        occupancy_map,
-        robot,
-        drone,
-        step_number,
-        victim_reached
-    )
+    robot.rescue_victim(environment, occupancy_map)
+
+    print_results(environment,occupancy_map,robot,drone,step_number,completion_reason)
 
     os.makedirs("outputs", exist_ok=True)
 
     map_name = os.path.splitext(os.path.basename(MAP_FILE))[0]
     output_file = f"outputs/{map_name}_{EXPERIMENT_MODE}.png"
+
+    frontiers = find_frontiers(occupancy_map)
+
+    visualize(environment,occupancy_map,robot,drone,path,frontiers,selected_goal,step_number)
 
     plt.savefig(output_file, dpi=200)
 

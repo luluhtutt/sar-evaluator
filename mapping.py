@@ -1,16 +1,15 @@
 import numpy as np
-
 from config import (
     FREE,
     OBSTACLE,
-    UNKNOWN,
-    VICTIM
+    UNKNOWN
 )
 
 class OccupancyMap:
 
     def __init__(self, height, width):
         self.grid = np.full((height, width), UNKNOWN, dtype=np.int8)
+        self.detected_victims = set()
 
     def update_from_sensor(self, environment, robot_position, sensor_range):
         # update cells near robot from sensors
@@ -26,13 +25,52 @@ class OccupancyMap:
                 if not environment.is_in_bounds(row, col):
                     continue
 
-                # circular sensing area
                 distance_squared = row_offset ** 2 + col_offset ** 2
 
                 if distance_squared > sensor_range ** 2:
                     continue
 
-                self.grid[row, col] = environment.grid[row, col]
+                self.observe_cell(environment, row, col)
+
+    def observe_cell(self, environment, row, col):
+        # copy an observed terrain cell into the occupancy map
+
+        self.grid[row, col] = environment.grid[row, col]
+
+        victim = environment.get_victim_at_position((row, col))
+
+        if victim is not None:
+            victim.detected = True
+            self.detected_victims.add(victim.position)
+
+    def mark_victim_detected(self, environment, position):
+        victim = environment.get_victim_at_position(position)
+
+        if victim is None:
+            return False
+
+        victim.detected = True
+        self.detected_victims.add(victim.position)
+
+        row, col = position
+        self.grid[row, col] = FREE
+
+        return True
+
+    def get_detected_victims(self):
+        return sorted(self.detected_victims)
+
+    def get_unreached_detected_victims(self, environment):
+        victims = []
+
+        for victim in environment.victims:
+            if victim.detected and not victim.reached:
+                victims.append(victim.position)
+
+        return victims
+
+    def count_detected_victims(self, environment):
+        return sum(victim.detected for victim in environment.victims)
 
     def is_in_bounds(self, position):
         row, col = position
@@ -40,38 +78,31 @@ class OccupancyMap:
         return 0 <= row < self.grid.shape[0] and 0 <= col < self.grid.shape[1]
 
     def is_traversable(self, position):
-        row, column = position
-
-        if self.is_in_bounds(position) and self.grid[row, column] != OBSTACLE:
-            return True
-        
-        return False
-    
-    def is_known_traversable(self, position):
-        # return true if the cell is known and safe
-        row, col = position
-        cell_value = self.grid[row, col]
-
         if not self.is_in_bounds(position):
             return False
 
-        return cell_value == FREE or cell_value == VICTIM
+        row, col = position
 
-    
-    def find_known_victim(self):
-        # if victim has been observed, return its position
-        victim_cells = np.argwhere(self.grid == VICTIM)
+        return self.grid[row, col] == FREE
 
-        if len(victim_cells) == 0:
+    def is_known_traversable(self, position):
+        if not self.is_in_bounds(position):
+            return False
+
+        row, col = position
+
+        return self.grid[row, col] == FREE
+
+    def find_known_victim(self, environment):
+        victims = self.get_unreached_detected_victims(environment)
+
+        if len(victims) == 0:
             return None
 
-        victim_row, victim_col = victim_cells[0]
-
-        return (int(victim_row), int(victim_col))
+        return victims[0]
 
     def count_known_cells(self):
-        # get number of cells that have been observed
-        return np.sum(self.grid != UNKNOWN)
+        return int(np.sum(self.grid != UNKNOWN))
 
     def count_total_cells(self):
         return self.grid.size
@@ -81,5 +112,4 @@ class OccupancyMap:
         total_cells = self.count_total_cells()
 
         return 100.0 * known_cells / total_cells
-
     

@@ -1,90 +1,89 @@
-# representation of the true world
-
-from __future__ import annotations
-
 import numpy as np
+from config import FREE, OBSTACLE
 
-from config import FREE, OBSTACLE, VICTIM
+class Victim:
+    def __init__(self, row, col):
+        self.position = (row, col)
+        self.detected = False
+        self.reached = False
 
 class Environment:
-    # stores map of the true world, obstacles, and victims
-
-    def __init__(self, map_file):
-        self.map_file = map_file
-
-        self.grid = None
-        self.height_map = None
+    def __init__(self, map_filename):
+        self.grid = []
+        self.height_map = []
 
         self.robot_start = None
-        self.victim_position = None
+        self.victims = []
 
-        self.load_map(map_file)
+        self.load_map(map_filename)
 
-    def load_map(self, map_file):
-        with open(map_file, "r") as f:
-            lines = [l.rstrip("\n") for l in f if l.strip()]
+    def load_map(self, map_filename):
+        with open(map_filename, "r") as file:
+            lines = [line.rstrip() for line in file]
 
-        # checks for valid map
         if len(lines) == 0:
             raise ValueError("Map file is empty")
 
-        width = len(lines[0])
+        expected_width = len(lines[0])
 
         for line in lines:
-            if len(line) != width:
-                raise ValueError("Unequal map widths")
+            if len(line) != expected_width:
+                raise ValueError("Every map row must have the same width")
 
-        height = len(lines)
+        for row, line in enumerate(lines):
+            grid_row = []
+            height_row = []
 
-        self.grid = np.full((height, width), FREE, dtype = int)
-        self.height_map = np.zeros((height, width), dtype = float)
+            for col, cell in enumerate(line):
 
-        for row, l in enumerate(lines):
-            for col, char in enumerate(l):
-                self.load_cell(row, col, char)
+                if cell == "#":
+                    grid_row.append(OBSTACLE)
+                    height_row.append(3)
+
+                else:
+                    grid_row.append(FREE)
+                    height_row.append(0)
+
+                    if cell == "S":
+                        self.robot_start = (row, col)
+
+                    elif cell == "V":
+                        self.victims.append(Victim(row, col))
+
+                    elif cell == "T":
+                        height_row[-1] = 2
+
+                    elif cell == "r":
+                        height_row[-1] = 1
+
+            self.grid.append(grid_row)
+            self.height_map.append(height_row)
+
+        self.grid = np.array(self.grid, dtype=np.int8)
+        self.height_map = np.array(self.height_map, dtype=np.int8)
 
         if self.robot_start is None:
-                    raise ValueError("Map does not contain a robot start 'S'.")
-        
-        if self.victim_position is None:
-            raise ValueError("Map does not contain a victim 'V'.")
+            raise ValueError("Map must contain one robot start marked with S")
 
-    def load_cell(self, row, col, symbol):
-        if symbol == ".":
-            self.grid[row, col] = FREE
+        if len(self.victims) == 0:
+            raise ValueError("Map must contain at least one victim marked with V")
 
-        elif symbol == "#":
-            self.set_obstacle(row, col, 3.0)
+    def get_victim_positions(self):
+        return [victim.position for victim in self.victims]
 
-        elif symbol == "r":
-            self.set_obstacle(row, col, 1.5)
+    def get_victim_at_position(self, position):
+        for victim in self.victims:
+            if victim.position == position:
+                return victim
 
-        elif symbol == "T":
-            self.set_obstacle(row, col, 5.0)
-
-        elif symbol == "S":
-            self.grid[row, col] = FREE
-            self.robot_start = (row, col)
-
-        elif symbol == "V":
-            self.grid[row, col] = VICTIM
-            self.victim_position = (row, col)
-
-        else:
-            raise ValueError(f"Unknown map symbol '{symbol}' at row {row}, column {col}")
-
-    def set_obstacle(self, row, col, height):
-        self.grid[row, col] = OBSTACLE
-        self.height_map[row, col] = height
+        return None
 
     def is_in_bounds(self, row, col):
         return 0 <= row < self.grid.shape[0] and 0 <= col < self.grid.shape[1]
 
-    def is_traversable(self, position: tuple[int, int]):
-        row, column = position
+    def count_detected_victims(self):
+        return sum(victim.detected for victim in self.victims)
 
-        if self.is_in_bounds(position) and self.grid[row, column] != OBSTACLE:
-            return True
-        
-        return False
+    def count_reached_victims(self):
+        return sum(victim.reached for victim in self.victims)
     

@@ -1,6 +1,7 @@
 import math
 
 from config import (
+    DRONE_SENSOR_RANGE,
     DRONE_CRUISE_ALTITUDE,
     DRONE_VERTICAL_SPEED,
     DRONE_CLEARANCE,
@@ -30,13 +31,13 @@ def detect_forward_obstacles(environment, drone_position, heading):
     minimum_row = max(0, int(math.floor(drone_row - FORWARD_CAMERA_RANGE)))
     maximum_row = min(environment.grid.shape[0], int(math.ceil(drone_row + FORWARD_CAMERA_RANGE + 1)))
     minimum_col = max(0, int(math.floor(drone_col - FORWARD_CAMERA_RANGE)))
-
     maximum_col = min(environment.grid.shape[1], int(math.ceil(drone_col + FORWARD_CAMERA_RANGE + 1)))
+    
 
     for row in range(minimum_row, maximum_row):
         for col in range(minimum_col, maximum_col):
 
-            obstacle_height = environment.height_map[row,col]
+            obstacle_height = environment.height_map[row, col]
 
             if obstacle_height <= 0:
                 continue
@@ -53,13 +54,11 @@ def detect_forward_obstacles(environment, drone_position, heading):
                 continue
 
             direction_row = row_diff / horizontal_distance
-
             direction_col = col_diff / horizontal_distance
 
             dot_product = (normalized_heading_row * direction_row + normalized_heading_col * direction_col)
 
             dot_product = max(-1.0, min(1.0, dot_product))
-
             angle_degrees = math.degrees(math.acos(dot_product))
 
             if angle_degrees > FORWARD_CAMERA_HALF_ANGLE_DEGREES:
@@ -91,7 +90,6 @@ class Drone:
         self.heading = (0, 1)
         self.forward_obstacles = []
 
-        # keep track of visited targets so no repeats
         self.visited_targets = set()
 
     def deploy(self, robot_position, target):
@@ -120,13 +118,37 @@ class Drone:
 
         return True
 
-    def move_one_step(self, environment):
+    def sense_environment(self, environment, occupancy_map):
+        if self.position is None:
+            return
+
+        drone_row, drone_col, altitude = self.position
+
+        center_row = int(round(drone_row))
+        center_col = int(round(drone_col))
+
+        for row_offset in range(-DRONE_SENSOR_RANGE, DRONE_SENSOR_RANGE + 1):
+            for col_offset in range(-DRONE_SENSOR_RANGE, DRONE_SENSOR_RANGE + 1):
+
+                row = center_row + row_offset
+                col = center_col + col_offset
+
+                if not environment.is_in_bounds(row, col):
+                    continue
+
+                distance_squared = row_offset ** 2 + col_offset ** 2
+
+                if distance_squared > DRONE_SENSOR_RANGE ** 2:
+                    continue
+
+                occupancy_map.observe_cell(environment,row,col)
+
+    def move_one_step(self, environment, occupancy_map):
         if not self.active:
             return False
 
         row, col, altitude = self.position
 
-        # Vertical takeoff.
         if self.state == "takeoff":
             self.energy_used += DRONE_TAKEOFF_ENERGY
 
@@ -135,15 +157,15 @@ class Drone:
             vertical_distance = new_altitude - altitude
 
             self.distance_traveled += vertical_distance
+            self.position = (row, col, new_altitude)
 
-            self.position = (row,col,new_altitude)
+            self.sense_environment(environment,occupancy_map)
 
-            if new_altitude>= DRONE_CRUISE_ALTITUDE:
+            if new_altitude >= DRONE_CRUISE_ALTITUDE:
                 self.state = "flying"
 
             return True
 
-        # Horizontal flight toward the target.
         if self.state == "flying":
             self.energy_used += DRONE_FLIGHT_ENERGY
 
@@ -165,23 +187,23 @@ class Drone:
             elif current_col > target_col:
                 new_col -= 1
 
-            # The drone is already at its target.
             if new_row == current_row and new_col == current_col:
                 self.state = "scanning"
                 self.scan_steps_remaining = DRONE_SCAN_STEPS
 
+                self.sense_environment(environment,occupancy_map)
+
                 return True
 
             row_change = new_row - current_row
-
             col_change = new_col - current_col
 
             if row_change != 0 or col_change != 0:
-                self.heading = (row_change,col_change)
+                self.heading = (row_change, col_change)
 
             self.forward_obstacles = detect_forward_obstacles(environment,self.position,self.heading)
 
-            obstacle_height = environment.height_map[new_row, new_col]
+            obstacle_height = environment.height_map[new_row,new_col]
 
             required_altitude = obstacle_height + DRONE_CLEARANCE
 
@@ -193,7 +215,9 @@ class Drone:
                 vertical_distance = new_altitude - altitude
 
                 self.distance_traveled += vertical_distance
-                self.position = (row,col,new_altitude)
+                self.position = (row, col, new_altitude)
+
+                self.sense_environment(environment,occupancy_map)
 
                 return True
 
@@ -203,16 +227,19 @@ class Drone:
 
             self.distance_traveled += horizontal_distance
 
+            self.sense_environment(environment,occupancy_map)
+
             if new_row == target_row and new_col == target_col:
                 self.state = "scanning"
                 self.scan_steps_remaining = DRONE_SCAN_STEPS
 
             return True
 
-        # Stay at the target while gathering data.
         if self.state == "scanning":
             self.energy_used += DRONE_SCAN_ENERGY
             self.scan_steps_remaining -= 1
+
+            self.sense_environment(environment,occupancy_map)
 
             if self.scan_steps_remaining <= 0:
                 self.state = "finished"
@@ -232,3 +259,4 @@ class Drone:
 
         self.forward_obstacles = []
         self.scan_steps_remaining = 0
+        
